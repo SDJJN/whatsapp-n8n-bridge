@@ -1,15 +1,15 @@
 const express = require("express");
 const axios = require("axios");
-const { default: makeWASocket, useSingleFileAuthState } = require("@whiskeysockets/baileys");
-const { Boom } = require("@hapi/boom");
-const { default: P } = require("pino");
+const baileys = require("@whiskeysockets/baileys");
+const makeWASocket = baileys.default;
+const { useSingleFileAuthState } = baileys;
+const P = require("pino");
 const { join } = require("path");
 const { existsSync, mkdirSync } = require("fs");
 
 const app = express();
 app.use(express.json());
 
-// Auth session file
 const sessionDir = "./auth";
 if (!existsSync(sessionDir)) mkdirSync(sessionDir);
 const { state, saveState } = useSingleFileAuthState(join(sessionDir, "session.json"));
@@ -30,31 +30,28 @@ sock.ev.on("messages.upsert", async (msg) => {
   const text = m.message?.conversation || m.message?.extendedTextMessage?.text;
 
   if (text) {
-    console.log("📨 Received:", text);
+    console.log("📨", from, ":", text);
 
-    // Forward to your n8n webhook if needed
+    // Optional: forward to your n8n webhook
     // await axios.post("https://your-n8n-webhook-url", { from, text });
 
     await sock.sendMessage(from, { text: "✅ Received: " + text });
   }
 });
 
-// API to send message
 app.post("/send", async (req, res) => {
   const { number, message } = req.body;
   const jid = number.includes("@s.whatsapp.net") ? number : number + "@s.whatsapp.net";
+
   try {
     await sock.sendMessage(jid, { text: message });
     res.json({ success: true });
   } catch (err) {
-    console.error("Send error:", err);
-    res.status(500).json({ success: false });
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/", (_, res) => {
-  res.send("✅ WhatsApp bridge is live");
-});
+app.get("/", (_, res) => res.send("✅ WhatsApp Bridge is running"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("🌐 Server running on port", PORT));
