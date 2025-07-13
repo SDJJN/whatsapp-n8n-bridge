@@ -1,70 +1,58 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const axios = require('axios');
-const express = require('express');
+const express = require("express");
+const { join } = require("path");
+const { existsSync, mkdirSync } = require("fs");
+const makeWASocket = require("@whiskeysockets/baileys").default;
+const { useSingleFileAuthState } = require("@whiskeysockets/baileys");
+const pino = require("pino");
 
-// Environment variables
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
-const PORT = process.env.PORT || 3000;
-
-if (!N8N_WEBHOOK_URL) {
-    console.error("FATAL: N8N_WEBHOOK_URL environment variable is not set.");
-    process.exit(1);
-}
-
-// 1. Set up Express for health checks
 const app = express();
-app.get('/health', (req, res) => {
-    // Check if the client is ready
-    const status = client.info ? 200 : 503;
-    const message = status === 200 ? 'WhatsApp client is ready.' : 'WhatsApp client is not ready.';
-    res.status(status).json({ status: message });
+app.use(express.json());
+
+const sessionDir = "./auth";
+if (!existsSync(sessionDir)) mkdirSync(sessionDir);
+const { state, saveState } = useSingleFileAuthState(join(sessionDir, "session.json"));
+
+const sock = makeWASocket({
+  printQRInTerminal: true,
+  auth: state,
+  logger: pino({ level: "silent" }),
 });
 
-app.listen(PORT, () => console.log(`Health check server running on port ${PORT}`));
+sock.ev.on("creds.update", saveState);
 
+sock.ev.on("messages.upsert", async (msg) => {
+  const m = msg.messages?.[0];
+  if (!m?.message || m.key.fromMe) return;
 
-// 2. Configure the WhatsApp Client
-const client = new Client({
-    // IMPORTANT: Save session to a persistent directory
-    // On Railway, this will be a mounted Volume. On Render, a Persistent Disk.
-    // The path '/data/session' assumes you mount your volume/disk to '/data'
-    authStrategy: new LocalAuth({ dataPath: '/data/session' }),
-    puppeteer: {
-        headless: true,
-        // IMPORTANT: Arguments required for running in a container
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process', // <- this one doesn't works in Windows
-            '--disable-gpu'
-        ],
-    }
+  const from = m.key.remoteJid;
+  const text =
+    m.message?.conversation ||
+    m.message?.extendedTextMessage?.text ||
+    m.message?.imageMessage?.caption;
+
+  if (text) {
+    console.log("📨 Received from", from, ":", text);
+    await sock.sendMessage(from, { text: "✅ Reply from bot: " + text });
+  }
 });
 
-// 3. Handle QR code generation for the first login
-client.on('qr', qr => {
-    console.log("QR Code received, please scan:");
-    qrcode.generate(qr, { small: true });
+app.post("/send", async (req, res) => {
+  const { number, message } = req.body;
+  if (!number || !message) return res.status(400).json({ error: "Missing number or message" });
+
+  const jid = number.includes("@s.whatsapp.net") ? number : number + "@s.whatsapp.net";
+
+  try {
+    await sock.sendMessage(jid, { text: message });
+    res.json({ success: true, to: number });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-client.on('ready', () => {
-    console.log('WhatsApp client is ready!');
-});
+app.get("/", (_, res) => res.send("✅ WhatsApp bridge is running"));
 
-// 4. Forward incoming messages to your n8n webhook
-client.on('message', async (message) => {
-    console.log(`Received message from ${message.from}: ${message.body}`);
-    try {
-        await axios.post(N8N_WEBHOOK_URL, message);
-        console.log(`Successfully forwarded message to n8n.`);
-    } catch (error) {
-        console.error('Error forwarding message to n8n:', error.message);
-    }
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🌍 Server running on port ${PORT}`);
 });
-
-client.initialize();
