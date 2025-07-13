@@ -1,51 +1,60 @@
-import makeWASocket from '@whiskeysockets/baileys';
-import { useSingleFileAuthState } from '@whiskeysockets/baileys';
-import express from 'express';
-import axios from 'axios';
+const express = require("express");
+const axios = require("axios");
+const { default: makeWASocket, useSingleFileAuthState } = require("@whiskeysockets/baileys");
+const { Boom } = require("@hapi/boom");
+const { default: P } = require("pino");
+const { join } = require("path");
+const { existsSync, mkdirSync } = require("fs");
 
-const { state, saveState } = useSingleFileAuthState('./auth.json');
 const app = express();
-const PORT = 3000;
-
 app.use(express.json());
 
-async function startBot() {
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true
-  });
+// Auth session file
+const sessionDir = "./auth";
+if (!existsSync(sessionDir)) mkdirSync(sessionDir);
+const { state, saveState } = useSingleFileAuthState(join(sessionDir, "session.json"));
 
-  sock.ev.on('creds.update', saveState);
+const sock = makeWASocket({
+  printQRInTerminal: true,
+  auth: state,
+  logger: P({ level: "silent" })
+});
 
-  // ✅ Receive message and forward to n8n
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+sock.ev.on("creds.update", saveState);
 
-    const sender = msg.key.remoteJid;
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+sock.ev.on("messages.upsert", async (msg) => {
+  const m = msg.messages?.[0];
+  if (!m?.message || m.key.fromMe) return;
 
-    // 👉 Send message to n8n webhook
-    await axios.post('https://your-n8n-domain/webhook/whatsapp', {
-      sender: sender,
-      message: text
-    });
-  });
+  const from = m.key.remoteJid;
+  const text = m.message?.conversation || m.message?.extendedTextMessage?.text;
 
-  // ✅ Receive reply from n8n and send it
-  app.post('/send', async (req, res) => {
-    const { number, message } = req.body;
-    try {
-      await sock.sendMessage(`${number}@s.whatsapp.net`, { text: message });
-      res.send('Message sent!');
-    } catch (err) {
-      console.error(err);
-      res.status(500).send('Failed');
-    }
-  });
+  if (text) {
+    console.log("📨 Received:", text);
 
-  app.get('/', (req, res) => res.send('WhatsApp bridge is running.'));
-  app.listen(PORT, () => console.log(`HTTP Server on http://localhost:${PORT}`));
-}
+    // Forward to your n8n webhook if needed
+    // await axios.post("https://your-n8n-webhook-url", { from, text });
 
-startBot();
+    await sock.sendMessage(from, { text: "✅ Received: " + text });
+  }
+});
+
+// API to send message
+app.post("/send", async (req, res) => {
+  const { number, message } = req.body;
+  const jid = number.includes("@s.whatsapp.net") ? number : number + "@s.whatsapp.net";
+  try {
+    await sock.sendMessage(jid, { text: message });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Send error:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+app.get("/", (_, res) => {
+  res.send("✅ WhatsApp bridge is live");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("🌐 Server running on port", PORT));
