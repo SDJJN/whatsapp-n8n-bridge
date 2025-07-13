@@ -2,8 +2,8 @@ const express = require("express");
 const axios = require("axios");
 const baileys = require("@whiskeysockets/baileys");
 const makeWASocket = baileys.default;
-const { useSingleFileAuthState } = baileys;
-const P = require("pino");
+const useSingleFileAuthState = baileys.useSingleFileAuthState;
+const { default: P } = require("pino");
 const { join } = require("path");
 const { existsSync, mkdirSync } = require("fs");
 
@@ -30,11 +30,7 @@ sock.ev.on("messages.upsert", async (msg) => {
   const text = m.message?.conversation || m.message?.extendedTextMessage?.text;
 
   if (text) {
-    console.log("📨", from, ":", text);
-
-    // Optional: forward to your n8n webhook
-    // await axios.post("https://your-n8n-webhook-url", { from, text });
-
+    console.log("📩", from, ":", text);
     await sock.sendMessage(from, { text: "✅ Received: " + text });
   }
 });
@@ -54,4 +50,4 @@ app.post("/send", async (req, res) => {
 app.get("/", (_, res) => res.send("✅ WhatsApp Bridge is running"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🌐 Server running on port", PORT));
+app.listen(PORT, () => console.log("🌐 Server on port", PORT));
