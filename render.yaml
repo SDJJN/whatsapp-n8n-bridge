@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: whatsapp-n8n-bridge
+    env: docker # Tell Render to use the Dockerfile
+    plan: free # Or your desired plan
+    healthCheck:
+      path: /health # Use the health check endpoint from the code
+    # Persistent Disk for saving the WhatsApp session
+    disks:
+      - name: session-data
+        mountPath: /data # Mount the disk at /data
+        sizeGB: 1
+    envVars:
+      - key: N8N_WEBHOOK_URL
+        # Set your n8n webhook URL in the Render dashboard
+        sync: false
